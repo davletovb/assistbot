@@ -21,16 +21,19 @@ from langchain.agents import load_tools, initialize_agent, Tool, AgentType
 from langchain.memory import ConversationBufferMemory
 from langchain.tools import DuckDuckGoSearchRun
 from langchain.utilities import GoogleSearchAPIWrapper
+from langchain.utilities.wolfram_alpha import WolframAlphaAPIWrapper
 from langchain.callbacks.streaming_stdout_final_only import FinalStreamingStdOutCallbackHandler
+
+from vectordb import VectorDB
 
 # Set OpenAI API key
 # openai_api_key = None
 openai.api_key = os.environ.get("OPENAI_API_KEY")
-telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-google_api_key = os.environ.get("GOOGLE_API_KEY")
-google_cse_id = os.environ.get("GOOGLE_CSE_ID")
-wolfram_alpha_appid=os.environ.get("WOLFRAM_ALPHA_APPID")
-stripe_token = os.environ.get("STRIPE_TOKEN")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")
+WOLFRAM_ALPHA_APPID=os.environ.get("WOLFRAM_ALPHA_APPID")
+STRIPE_TOKEN = os.environ.get("STRIPE_TOKEN")
 
 # Enable logging for debugging
 logging.basicConfig(
@@ -73,8 +76,18 @@ def transcribe_voice(file):
     return transcript["text"]
 
 
+# Save file to the vector database
+def save_to_database(file, chat_user_id):
+    # check if the chat_user_id is string
+    if not isinstance(chat_user_id, str):
+        chat_user_id = str(chat_user_id)
+    db = VectorDB(chat_user_id)
+    summary = db.add(file)
+    return summary
+
+
 # Prompt the LLM to generate a response
-def prompt(messages, chat_context):
+def prompt(messages, chat_context, chat_id):
 
     # Format the chat history as a string
     formatted_chat_history = "\n".join([f"{k}: {v}" for entry in chat_context for k, v in entry.items()])
@@ -110,7 +123,7 @@ def prompt(messages, chat_context):
         return_direct=True)
     
     # create a tool for searching the web
-    search = GoogleSearchAPIWrapper(google_api_key=google_api_key, google_cse_id=google_cse_id, k=5)
+    search = GoogleSearchAPIWrapper(google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID, k=5)
 
     search_tool = Tool(
         name="Search",
@@ -119,16 +132,37 @@ def prompt(messages, chat_context):
                     Useful for when you need to answer questions about current events.
                     Use this more if the question is about technical topics, errors or fixes.""")
     
+    # create a tool for wolfram alpha
+    wolfram_alpha = WolframAlphaAPIWrapper(wolfram_alpha_appid=WOLFRAM_ALPHA_APPID)
+
+    wolfram_alpha_tool = Tool(
+        name="Wolfram Alpha",
+        func=wolfram_alpha.run,
+        description="""Use this tool to search Wolfram Alpha.
+                    Useful for when you need to answer questions about Science, Engineering, Technology, Culture, Society and Everyday Life.""")
+    
+    # create a tool for the vector database
+    # check if the chat_user_id is string
+    chat_user_id = str(chat_id)
+    db = VectorDB(chat_user_id)
+
+    vector_db_tool = Tool(
+        name="Search User Documents",
+        func=db.query,
+        description="""Use this tool to search the user documents database.
+                    Useful for when you need to answer questions about user's documents.
+                    Documents such as PDFs, Word Documents, HTML files, text files, CSV files, etc.""")
+    
     # Provide access to a list of tools that the agents will use
     tools = load_tools(['wikipedia',
                         'open-meteo-api',
-                        'llm-math',
-                        'wolfram-alpha'],
+                        'llm-math'],
                         llm=llm)
 
     tools.append(image_tool)
     tools.append(search_tool)
-    #tools.append(wolfram_alpha_tool)
+    tools.append(wolfram_alpha_tool)
+    tools.append(vector_db_tool)
     
 
     # initialise the agents & make all the tools and llm available to it
@@ -189,7 +223,7 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     # If the user sends a message, send the message to the chatbot
     if user_message:
 
-        response = prompt(user_message, chat_context[chat_id])
+        response = prompt(user_message, chat_context[chat_id], chat_id)
 
         # check if the answer has an image url
         image_url_pattern = r"(https://oaidalleapiprodscus\.blob\..*)"
@@ -222,6 +256,39 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         chat_context[chat_id].pop(0)
 
 
+# Document handler
+def document_handler(update: Update, context: CallbackContext) -> None:
+    # Get the chat id
+    chat_id = update.message.chat_id
+
+    logger.info("Document received")
+
+    # If the chat context is empty, initialize it
+    if chat_id not in chat_context:
+        chat_context[chat_id] = []
+
+    # Get the document
+    file_name = update.message.document.file_name
+    file_id = update.message.document.file_id
+    file = context.bot.get_file(file_id)
+    file.download(file_name)
+
+    logger.info("Document downloaded")
+
+    # Save the document to the vector database
+    #with open(file_name, "rb") as f:
+    summary = save_to_database(file_name, chat_id)
+
+    update.message.reply_text(quote=True, text="Summary of the document: "+summary)
+
+    # Add the document to the chat context
+    chat_context[chat_id].append(
+        {"Human": f"{file_name} saved to my documents database."})
+
+    # If the chat context is too long, remove the oldest message
+    if len(chat_context[chat_id]) > buffer_size:
+        chat_context[chat_id].pop(0)
+
 # Donation
 def donate(update: Update, context: CallbackContext) -> None:
     out = context.bot.send_invoice(
@@ -229,7 +296,7 @@ def donate(update: Update, context: CallbackContext) -> None:
         title="Test donation",
         description="Donate money here.",
         payload="test",
-        provider_token=stripe_token,
+        provider_token=STRIPE_TOKEN,
         currency="USD",
         prices=[LabeledPrice("Give", 2000)],
         need_name=False,
@@ -258,7 +325,7 @@ def error_handler(update: Update, context: CallbackContext) -> None:
 
 def main() -> None:
     # Set up the updater and dispatcher
-    updater = Updater(telegram_bot_token)
+    updater = Updater(TELEGRAM_BOT_TOKEN)
     dispatcher = updater.dispatcher
 
     # Add handlers
@@ -270,8 +337,10 @@ def main() -> None:
         Filters.successful_payment, successful_payment_callback))
     dispatcher.add_handler(MessageHandler(
         Filters.text | Filters.voice | Filters.audio & ~Filters.command, message_handler))
+    dispatcher.add_handler(MessageHandler(
+        Filters.document.mime_type("application/pdf") | Filters.document.mime_type("text/plain") | Filters.document.mime_type("application/msword") | Filters.document.mime_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document") | Filters.document.mime_type("text/html") | Filters.document.mime_type("text/csv") | Filters.document.mime_type("text/tab-separated-values") | Filters.document.mime_type("text/richtext"),
+        document_handler))
     dispatcher.add_error_handler(error_handler)
-
     # Start the bot
     updater.start_polling()
     updater.idle()
