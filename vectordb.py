@@ -4,7 +4,7 @@ Vector database for storing vectors and their metadata.
 
 import os
 import logging
-from langchain.document_loaders import UnstructuredFileLoader
+from langchain.document_loaders import UnstructuredFileLoader, WebBaseLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
@@ -69,6 +69,35 @@ class VectorDB():
         # Clear the vector store from the memory
         #self.vector_store = None
     
+    
+    def add_urls(self, urls):
+
+        loader = WebBaseLoader(urls)
+
+        docs = loader.load()
+
+        logger.info(f"Web page loaded")
+
+        # Split the document into sentences
+        texts = self.text_splitter.split_documents(docs)
+
+        logger.info(f"Split document into chunks")
+
+        # Store the embeddings
+        self.vector_store.add_documents(documents=texts)
+
+        logger.info(f"Stored embeddings")
+        
+        # Persist the vector store to disk
+        self.vector_store.persist()
+
+        # Gather the summary
+        summary = self.summarize(texts)
+        logger.info(f"Summary gathered")
+
+        return summary
+    
+
     def query(self, query):
         """Query the vector store for similar vectors."""
         
@@ -82,6 +111,7 @@ class VectorDB():
         results = chain({"question": query}, return_only_outputs=True)
 
         return results
+
     
     def summarize(self, docs):
         """Get the summary of a document."""

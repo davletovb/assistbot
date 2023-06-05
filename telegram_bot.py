@@ -81,8 +81,24 @@ def save_to_database(file, chat_user_id):
     # check if the chat_user_id is string
     if not isinstance(chat_user_id, str):
         chat_user_id = str(chat_user_id)
+
     db = VectorDB(chat_user_id)
+
     summary = db.add(file)
+
+    return summary
+
+
+# Get url and summarize text
+def summarize_url(urls, chat_user_id):
+    # check if the chat_user_id is string
+    if not isinstance(chat_user_id, str):
+        chat_user_id = str(chat_user_id)
+
+    db = VectorDB(chat_user_id)
+
+    summary = db.add_urls(urls)
+
     return summary
 
 
@@ -223,19 +239,28 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     # If the user sends a message, send the message to the chatbot
     if user_message:
 
-        response = prompt(user_message, chat_context[chat_id], chat_id)
-
-        # check if the answer has an image url
-        image_url_pattern = r"(https://oaidalleapiprodscus\.blob\..*)"
-        match = re.match(image_url_pattern, response)
-
-        # if the answer has an image url, send the image
-        if match:
-            image_url = match.group(1)
-            update.message.reply_photo(image_url)
+        # Check if the message is url
+        url_pattern = r"(https?://\S+)"
+        url_match = re.match(url_pattern, user_message)
+        if url_match:
+            # If the message is a url, summarize the content
+            url = url_match.group(1)
+            response = summarize_url(url, chat_id)
+            update.message.reply_text("Summary of the web page: " + response, quote=True)
         else:
-            # if no image url, send the text
-            update.message.reply_text(response)
+            response = prompt(user_message, chat_context[chat_id], chat_id)
+
+            # check if the answer has an image url
+            image_url_pattern = r"(https://oaidalleapiprodscus\.blob\..*)"
+            image_match = re.match(image_url_pattern, response)
+
+            # if the answer has an image url, send the image
+            if image_match:
+                image_url = image_match.group(1)
+                update.message.reply_photo(image_url)
+            else:
+                # if no image url, send the text
+                update.message.reply_text(response)
     else:
         update.message.reply_text("Sorry, I don't understand that. Please try again.")
     
