@@ -24,7 +24,7 @@ from langchain.utilities import GoogleSearchAPIWrapper
 from langchain.utilities.wolfram_alpha import WolframAlphaAPIWrapper
 from langchain.callbacks.streaming_stdout_final_only import FinalStreamingStdOutCallbackHandler
 
-from vectordb import VectorDB
+from .vectordb import VectorDB
 
 # Set OpenAI API key
 # openai_api_key = None
@@ -61,6 +61,9 @@ def set_api_key(update: Update, context: CallbackContext) -> None:
 
 # Generate image
 def generate_image(prompt):
+
+    logger.info("Generating image...")
+
     response = openai.Image.create(
         prompt=prompt,
         n=1,
@@ -70,9 +73,13 @@ def generate_image(prompt):
     return response['data'][0]['url']
 
 
-# Transcribe audio
+# Transcribe voice
 def transcribe_voice(file):
+    
+    logger.info("Transcribing voice...")
+
     transcript = openai.Audio.transcribe("whisper-1", file)
+    
     return transcript["text"]
 
 
@@ -82,28 +89,28 @@ def save_to_database(file, chat_user_id):
     if not isinstance(chat_user_id, str):
         chat_user_id = str(chat_user_id)
 
-    db = VectorDB(chat_user_id)
+    db = VectorDB(chat_user_id, openai.api_key)
 
-    summary = db.add(file)
+    summary = db.add_document(file)
 
     return summary
 
 
 # Get url and summarize text
-def summarize_url(urls, chat_user_id):
+def summarize_url(url, chat_user_id):
     # check if the chat_user_id is string
     if not isinstance(chat_user_id, str):
         chat_user_id = str(chat_user_id)
 
-    db = VectorDB(chat_user_id)
+    db = VectorDB(chat_user_id, openai.api_key)
 
-    summary = db.add_urls(urls)
+    summary = db.add_url(url)
 
     return summary
 
 
 # Prompt the LLM to generate a response
-def prompt(messages, chat_context, chat_id):
+def generate_response(messages, chat_context, chat_id):
 
     # Format the chat history as a string
     formatted_chat_history = "\n".join([f"{k}: {v}" for entry in chat_context for k, v in entry.items()])
@@ -160,7 +167,7 @@ def prompt(messages, chat_context, chat_id):
     # create a tool for the vector database
     # check if the chat_user_id is string
     chat_user_id = str(chat_id)
-    db = VectorDB(chat_user_id)
+    db = VectorDB(chat_user_id, openai.api_key)
 
     vector_db_tool = Tool(
         name="Search User Documents",
@@ -245,10 +252,12 @@ def message_handler(update: Update, context: CallbackContext) -> None:
         if url_match:
             # If the message is a url, summarize the content
             url = url_match.group(1)
-            response = summarize_url(url, chat_id)
-            update.message.reply_text("Summary of the web page: " + response, quote=True)
+            summary = summarize_url(url, chat_id)
+            response = "Summary of the web page: " + summary
+            update.message.reply_text(text=response, quote=True)
+            user_message = f"{url} saved to my documents database."
         else:
-            response = prompt(user_message, chat_context[chat_id], chat_id)
+            response = generate_response(user_message, chat_context[chat_id], chat_id)
 
             # check if the answer has an image url
             image_url_pattern = r"(https://oaidalleapiprodscus\.blob\..*)"
@@ -280,6 +289,8 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     if len(chat_context[chat_id]) > buffer_size:
         chat_context[chat_id].pop(0)
 
+    logger.info("Chat history updated")
+
 
 # Document handler
 def document_handler(update: Update, context: CallbackContext) -> None:
@@ -301,10 +312,11 @@ def document_handler(update: Update, context: CallbackContext) -> None:
     logger.info("Document downloaded")
 
     # Save the document to the vector database
-    #with open(file_name, "rb") as f:
     summary = save_to_database(file_name, chat_id)
 
-    update.message.reply_text(quote=True, text="Summary of the document: "+summary)
+    response = "Summary of the document: " + summary
+
+    update.message.reply_text(quote=True, text=response)
 
     # Add the document to the chat context
     chat_context[chat_id].append(
@@ -313,6 +325,34 @@ def document_handler(update: Update, context: CallbackContext) -> None:
     # If the chat context is too long, remove the oldest message
     if len(chat_context[chat_id]) > buffer_size:
         chat_context[chat_id].pop(0)
+    
+    # Add the response to the chat context
+    chat_context[chat_id].append(
+        {"AI": response})
+    
+    # If the chat context is too long, remove the oldest message
+    if len(chat_context[chat_id]) > buffer_size:
+        chat_context[chat_id].pop(0)
+    
+    logger.info("Chat history updated")
+
+
+# Clear the document database
+def clear_database(update: Update, context: CallbackContext) -> None:
+    # Get the chat id
+    chat_id = update.message.chat_id
+
+    # check if the chat_user_id is string
+    if not isinstance(chat_id, str):
+        chat_user_id = str(chat_id)
+
+    db = VectorDB(chat_user_id, openai.api_key)
+
+    # Clear the database
+    db.clear_database()
+
+    update.message.reply_text(text="Database cleared.")
+
 
 # Donation
 def donate(update: Update, context: CallbackContext) -> None:
@@ -357,6 +397,7 @@ def main() -> None:
     dispatcher.add_handler(CommandHandler("start", start))
     #dispatcher.add_handler(CommandHandler("setapikey", set_api_key))
     dispatcher.add_handler(CommandHandler("donate", donate))
+    dispatcher.add_handler(CommandHandler("clear_database", clear_database))
     dispatcher.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
     dispatcher.add_handler(MessageHandler(
         Filters.successful_payment, successful_payment_callback))

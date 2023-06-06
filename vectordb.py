@@ -15,7 +15,7 @@ from langchain.chains.summarize import load_summarize_chain
 from chromadb.config import Settings
 
 # Set OpenAI API key
-openai_api_key = os.environ["OPENAI_API_KEY"]
+openai_api_key = None
 
 # Set Chroma settings
 CHROMA_SETTINGS = Settings(
@@ -23,94 +23,100 @@ CHROMA_SETTINGS = Settings(
     persist_directory="db",
     anonymized_telemetry=False)
 
-# Set logging level
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 class VectorDB():
-    def __init__(self, chat_user_id):
+    def __init__(self, chat_user_id, openai_api_key):
+        if not isinstance(chat_user_id, str) or not isinstance(openai_api_key, str):
+            raise ValueError("chat_user_id and openai_api_key must be strings.")
+            
+        self.logger = logging.getLogger(__name__)
+        logging.basicConfig(
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
         self.text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
         self.embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
         self.vector_store = Chroma(embedding_function=self.embeddings, client_settings=CHROMA_SETTINGS, persist_directory="db", collection_name=chat_user_id)
         self.llm = OpenAI(openai_api_key=openai_api_key, temperature=0)
 
-    def add(self, document):
+    def add_document(self, document):
         """Ingest a document into the vector store."""
+        try:
+            # Load the document
+            loader = UnstructuredFileLoader(document)
+            doc = loader.load()
+            
+            self.logger.info(f"Document loaded")
 
-        # Load the document
-        loader = UnstructuredFileLoader(document)
+            # Split the document into sentences
+            texts = self.text_splitter.split_documents(doc)
 
-        doc = loader.load()
-        
-        logger.info(f"Document loaded")
+            self.logger.info(f"Split document into chunks")
+            
+            # Store the embeddings
+            self.vector_store.add_documents(documents=texts)
 
-        # Split the document into sentences
-        texts = self.text_splitter.split_documents(doc)
+            self.logger.info(f"Stored embeddings")
+            
+            # Persist the vector store to disk
+            self.vector_store.persist()
 
-        logger.info(f"Split document into chunks")
-        
-        # Store the embeddings
-        self.vector_store.add_documents(documents=texts)
+            # return the summary of the document
+            self.logger.info(f"Gathering summary")
+            summary = self.summarize(texts)
 
-        logger.info(f"Stored embeddings")
-        
-        # Persist the vector store to disk
-        self.vector_store.persist()
-
-        # return the summary of the document
-        logger.info(f"Gathering summary")
-        summary = self.summarize(texts)
-
-        return summary
-        
-        # Clear the vector store from the memory
-        #self.vector_store = None
+            return summary
+        except Exception as e:
+            self.logger.error(f"Error adding document: {e}")
+            return None
     
     
-    def add_urls(self, urls):
+    def add_url(self, url):
+        """Ingest a web page into the vector store."""
+        try:
+            loader = WebBaseLoader(url)
 
-        loader = WebBaseLoader(urls)
+            docs = loader.load()
 
-        docs = loader.load()
+            self.logger.info(f"Web page loaded")
 
-        logger.info(f"Web page loaded")
+            # Split the document into sentences
+            texts = self.text_splitter.split_documents(docs)
 
-        # Split the document into sentences
-        texts = self.text_splitter.split_documents(docs)
+            self.logger.info(f"Split document into chunks")
 
-        logger.info(f"Split document into chunks")
+            # Store the embeddings
+            self.vector_store.add_documents(documents=texts)
 
-        # Store the embeddings
-        self.vector_store.add_documents(documents=texts)
+            self.logger.info(f"Stored embeddings")
+            
+            # Persist the vector store to disk
+            self.vector_store.persist()
 
-        logger.info(f"Stored embeddings")
-        
-        # Persist the vector store to disk
-        self.vector_store.persist()
+            # Gather the summary
+            summary = self.summarize(texts)
+            self.logger.info(f"Summary gathered")
 
-        # Gather the summary
-        summary = self.summarize(texts)
-        logger.info(f"Summary gathered")
-
-        return summary
+            return summary
+        except Exception as e:
+            self.logger.error(f"Error adding url: {e}")
+            return None
     
 
     def query(self, query):
         """Query the vector store for similar vectors."""
-        
-        # Query the vector store
-        chain = RetrievalQAWithSourcesChain.from_chain_type(
-            llm=self.llm, chain_type="stuff", retriever=self.vector_store.as_retriever())
-        
-        logger.info(f"Querying vector store")
+        try:
+            # Query the vector store
+            chain = RetrievalQAWithSourcesChain.from_chain_type(
+                llm=self.llm, chain_type="stuff", retriever=self.vector_store.as_retriever())
+            
+            self.logger.info(f"Querying vector store")
 
-        # Get the results
-        results = chain({"question": query}, return_only_outputs=True)
+            # Get the results
+            results = chain({"question": query}, return_only_outputs=True)
 
-        return results
+            return results
+        except Exception as e:
+            self.logger.error(f"Error querying vector store: {e}")
+            return None
 
     
     def summarize(self, docs):
@@ -130,9 +136,25 @@ class VectorDB():
                                      chain_type="map_reduce",
                                      map_prompt=prompt,
                                      combine_prompt=prompt)
+        
+        try:
+            summary = chain.run(input_documents=docs, return_only_outputs=True)
 
-        summary = chain.run(input_documents=docs, return_only_outputs=True)
+            self.logger.info(f"Summary gathered")
 
-        logger.info(f"Summary gathered")
+            return summary
+        except Exception as e:
+            self.logger.error(f"Error gathering summary: {e}")
+            return None
+    
+    def clear_database(self):
+        """Clear the vector store."""
+        try:
+            # Delete the collection from the vector store
+            self.vector_store.delete_collection()
 
-        return summary
+            self.logger.info(f"Vector store collection cleared")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error clearing vector store: {e}")
+            return False
