@@ -7,9 +7,7 @@ from tempfile import NamedTemporaryFile
 from pydub import AudioSegment
 from telegram import Update, InlineKeyboardButton, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardMarkup, ParseMode, Bot, LabeledPrice, ChatAction
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, PollAnswerHandler, CallbackQueryHandler, PreCheckoutQueryHandler
-from threading import Thread
 from cachetools import cached, TTLCache
-from datetime import datetime
 
 from prompter import Prompter
 
@@ -26,7 +24,7 @@ chat_context = TTLCache(maxsize=10, ttl=14400)
 # Start command
 def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
-        'Hi! I am your ChatGPT bot. Ask me anything, and I will try to help!')
+        'Hi! I am your AI assistant. Ask me anything, and I will try to help!')
 
 # Show typing status while waiting for a response
 def send_typing_status(update: Update, context: CallbackContext, stop_event: threading.Event):
@@ -52,7 +50,13 @@ def process_message(prompter, update, user_message, chat_id):
             image_url = image_match.group(1)
             update.message.reply_photo(image_url)
         else:
-            update.message.reply_text(text=response)
+            if update.message.voice or update.message.audio:
+                audio = prompter.generate_audio(text=response)
+                if audio:
+                    update.message.reply_voice(voice=audio)
+            else:
+                update.message.reply_text(text=response)
+
     return user_message, response
 
 
@@ -66,7 +70,12 @@ def message_handler(update: Update, context: CallbackContext) -> None:
     if chat_id not in chat_context:
         chat_context[chat_id] = []
     
-    prompter = Prompter(chat_id=chat_id)
+    prompter = Prompter(chat_id=chat_id, 
+                        openai_api_key = OPENAI_API_KEY,
+                        google_api_key = GOOGLE_API_KEY,
+                        google_cse_id = GOOGLE_CSE_ID,
+                        wolfram_alpha_appid = WOLFRAM_ALPHA_APPID,
+                        eleven_api_key = ELEVEN_API_KEY)
     
     try:
         user_message = None
@@ -113,11 +122,10 @@ def message_handler(update: Update, context: CallbackContext) -> None:
 
         else:
             update.message.reply_text("Sorry, I don't understand that. Please try again.")
-    
+
     except Exception as e:
         logger.error(f"Error during message processing: {e}")
         update.message.reply_text("Sorry, I couldn't process your message. Please try again.")
-
 
 # Document handler
 def document_handler(update: Update, context: CallbackContext) -> None:
@@ -130,7 +138,12 @@ def document_handler(update: Update, context: CallbackContext) -> None:
     if chat_id not in chat_context:
         chat_context[chat_id] = []
     
-    prompter = Prompter(chat_id=chat_id)
+    prompter = Prompter(chat_id=chat_id, 
+                        openai_api_key = OPENAI_API_KEY,
+                        google_api_key = GOOGLE_API_KEY,
+                        google_cse_id = GOOGLE_CSE_ID,
+                        wolfram_alpha_appid = WOLFRAM_ALPHA_APPID,
+                        eleven_api_key = ELEVEN_API_KEY)
     
     try:
         # Get the document
@@ -168,13 +181,68 @@ def clear_database(update: Update, context: CallbackContext) -> None:
     # Get the chat id
     chat_id = update.message.chat_id
 
-    prompter = Prompter(chat_id=chat_id)
+    prompter = Prompter(chat_id=chat_id, 
+                        openai_api_key = OPENAI_API_KEY,
+                        google_api_key = GOOGLE_API_KEY,
+                        google_cse_id = GOOGLE_CSE_ID,
+                        wolfram_alpha_appid = WOLFRAM_ALPHA_APPID,
+                        eleven_api_key = ELEVEN_API_KEY)
 
     # if the database is cleared, send a message to the user
     if prompter.clear_database():
         update.message.reply_text(text="Database cleared.")
     else:
         update.message.reply_text(text="Database not cleared.")
+
+
+# Donation
+def donate(update: Update, context: CallbackContext) -> None:
+    out = context.bot.send_invoice(
+        chat_id=update.message.chat_id,
+        title="Test donation",
+        description="Donate money here.",
+        payload="test",
+        provider_token=STRIPE_TOKEN,
+        currency="USD",
+        prices=[LabeledPrice("Give", 2000)],
+        need_name=False,
+    )
+
+
+# Pre-checkout handler
+def pre_checkout_handler(update: Update, context: CallbackContext) -> None:
+    """https://core.telegram.org/bots/api#answerprecheckoutquery"""
+    query = update.pre_checkout_query
+    query.answer(ok=True)
+
+
+# Successful payment
+def successful_payment_callback(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text("Thank you for your purchase!")
+
+
+# Select role for the assistant
+def select_role(update: Update, context: CallbackContext) -> None:
+    keyboard = [
+        [
+            InlineKeyboardButton("Assistant", callback_data="assistant"),
+            InlineKeyboardButton("Teacher", callback_data="teacher"),
+            InlineKeyboardButton("Researcher", callback_data="researcher"),
+            InlineKeyboardButton("Coder", callback_data="coder"),
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("Please choose a role:",
+                              reply_markup=reply_markup)
+
+
+def role_callback(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    query.answer()
+    role = query.data
+    context.user_data["role"] = role
+    query.edit_message_text(text=f"Selected role: {role}")
 
 
 # Error handler
@@ -190,8 +258,28 @@ def main() -> None:
     updater = Updater(TELEGRAM_BOT_TOKEN)
     dispatcher = updater.dispatcher
 
+    # Set API keys
+    global OPENAI_API_KEY
+    global STRIPE_TOKEN
+    global GOOGLE_API_KEY
+    global GOOGLE_CSE_ID
+    global WOLFRAM_ALPHA_APPID
+    global ELEVEN_API_KEY
+    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+    STRIPE_TOKEN = os.environ.get("STRIPE_TOKEN")
+    GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+    GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")
+    WOLFRAM_ALPHA_APPID = os.environ.get("WOLFRAM_ALPHA_APPID")
+    ELEVEN_API_KEY = os.environ.get("ELEVEN_API_KEY")
+
     # Add handlers
     dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("selectrole", select_role))
+    dispatcher.add_handler(CallbackQueryHandler(role_callback))
+    dispatcher.add_handler(CommandHandler("donate", donate))
+    dispatcher.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
+    dispatcher.add_handler(MessageHandler(
+        Filters.successful_payment, successful_payment_callback))
     dispatcher.add_handler(CommandHandler("clear_database", clear_database))
     dispatcher.add_handler(MessageHandler(
         Filters.text | Filters.voice | Filters.audio & ~Filters.command, message_handler))
