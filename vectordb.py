@@ -14,9 +14,6 @@ from langchain.prompts import PromptTemplate
 from langchain.chains.summarize import load_summarize_chain
 from chromadb.config import Settings
 
-# Set OpenAI API key
-openai_api_key = None
-
 # Set Chroma settings
 CHROMA_SETTINGS = Settings(
     chroma_db_impl="duckdb+parquet",
@@ -43,24 +40,17 @@ class VectorDB():
             # Load the document
             loader = UnstructuredFileLoader(document)
             doc = loader.load()
-            
-            self.logger.info(f"Document loaded")
 
             # Split the document into sentences
             texts = self.text_splitter.split_documents(doc)
-
-            self.logger.info(f"Split document into chunks")
             
             # Store the embeddings
             self.vector_store.add_documents(documents=texts)
-
-            self.logger.info(f"Stored embeddings")
             
             # Persist the vector store to disk
             self.vector_store.persist()
 
             # return the summary of the document
-            self.logger.info(f"Gathering summary")
             summary = self.summarize(texts)
 
             return summary
@@ -76,24 +66,17 @@ class VectorDB():
 
             docs = loader.load()
 
-            self.logger.info(f"Web page loaded")
-
             # Split the document into sentences
             texts = self.text_splitter.split_documents(docs)
 
-            self.logger.info(f"Split document into chunks")
-
             # Store the embeddings
             self.vector_store.add_documents(documents=texts)
-
-            self.logger.info(f"Stored embeddings")
             
             # Persist the vector store to disk
             self.vector_store.persist()
 
             # Gather the summary
             summary = self.summarize(texts)
-            self.logger.info(f"Summary gathered")
 
             return summary
         except Exception as e:
@@ -107,8 +90,6 @@ class VectorDB():
             # Query the vector store
             chain = RetrievalQAWithSourcesChain.from_chain_type(
                 llm=self.llm, chain_type="stuff", retriever=self.vector_store.as_retriever())
-            
-            self.logger.info(f"Querying vector store")
 
             # Get the results
             results = chain({"question": query}, return_only_outputs=True)
@@ -140,8 +121,6 @@ class VectorDB():
         try:
             summary = chain.run(input_documents=docs, return_only_outputs=True)
 
-            self.logger.info(f"Summary gathered")
-
             return summary
         except Exception as e:
             self.logger.error(f"Error gathering summary: {e}")
@@ -153,7 +132,6 @@ class VectorDB():
             # Delete the collection from the vector store
             self.vector_store.delete_collection()
 
-            self.logger.info(f"Vector store collection cleared")
             return True
         except Exception as e:
             self.logger.error(f"Error clearing vector store: {e}")

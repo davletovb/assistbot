@@ -1,6 +1,7 @@
 import os
 import logging
 import openai
+import elevenlabs
 import time
 
 from langchain.chat_models import ChatOpenAI
@@ -19,13 +20,6 @@ from vectordb import VectorDB
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Set OpenAI API key
-# openai_api_key = None
-openai.api_key = os.environ.get("OPENAI_API_KEY")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")
-WOLFRAM_ALPHA_APPID=os.environ.get("WOLFRAM_ALPHA_APPID")
 
 class RateLimitError(Exception):
     def __init__(self, message, retry_after=None):
@@ -47,16 +41,34 @@ def handle_rate_limiting(func, *args, **kwargs):
                 time.sleep(wait_time)
             else:
                 raise RateLimitError("Too many rate-limited attempts.", retry_after=retry_after) from e
+        except elevenlabs.RateLimitError as e:
+            if attempt < retries - 1:
+                retry_after = int(e.headers.get("Retry-After", 0))
+                wait_time = retry_after or (backoff_factor ** attempt)
+                logger.warning(f"Rate limit exceeded. Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
         except Exception as e:
             raise e
 
 class Prompter:
-    def __init__(self, chat_id):
+    def __init__(self, chat_id, openai_api_key, google_api_key, google_cse_id, wolfram_alpha_appid, eleven_api_key):
         # check if the chat_id is string
         if not isinstance(chat_id, str):
             self.chat_user_id = str(chat_id)
         else:
             self.chat_user_id = chat_id
+        
+        # set the api keys
+        global GOOGLE_API_KEY
+        global GOOGLE_CSE_ID
+        global WOLFRAM_ALPHA_APPID
+        global ELEVEN_API_KEY
+        openai.api_key = openai_api_key
+        GOOGLE_API_KEY = google_api_key
+        GOOGLE_CSE_ID = google_cse_id
+        WOLFRAM_ALPHA_APPID = wolfram_alpha_appid
+        ELEVEN_API_KEY = eleven_api_key
+
 
     def generate_image(self, prompt):
         try:
@@ -73,43 +85,14 @@ class Prompter:
         except Exception as e:
             logger.error(f"Error transcribing voice: {e}")
             return None
-
-    def save_document(self, document):
-        try:
-            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
-            summary = db.add_document(document=document)
-            return summary
-        except Exception as e:
-            logger.error(f"Error saving document: {e}")
-            return "Error saving document"
-
-    def save_url(self, url):
-        try:
-            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
-            summary = db.add_url(url=url)
-            return summary
-        except Exception as e:
-            logger.error(f"Error saving URL: {e}")
-            return "Error saving URL"
-        
-    def search_database(self, query):
-        try:
-            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
-            results = db.query(query=query)
-            return results
-        except Exception as e:
-            logger.error(f"Error searching user documents: {e}")
-            return "Error searching user documents"
     
-    def clear_database(self):
+    def generate_audio(self, text):
         try:
-            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
-            db.clear_database()
-            return True
+            audio = handle_rate_limiting(elevenlabs.generate, api_key=ELEVEN_API_KEY, text=text, voice="Bella", model="eleven_monolingual_v1")
+            return audio
         except Exception as e:
-            logger.error(f"Error clearing user documents: {e}")
-            return False
-
+            logger.error(f"Error generating audio: {e}")
+            return None
 
     # Prompt the LLM to generate a response
     def generate_response(self, message, chat_context):
@@ -148,8 +131,8 @@ class Prompter:
         
         tools.extend([
             Tool(name="Image Model", func=self.generate_image, description="Generate images from text", return_direct=True),
-            Tool(name="Google Search", func=GoogleSearchAPIWrapper(google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID, k=5).run, description="Search the web"),
-            Tool(name="Wolfram Alpha", func=WolframAlphaAPIWrapper(wolfram_alpha_appid=WOLFRAM_ALPHA_APPID).run, description="Search Wolfram Alpha"),
+            Tool(name="Google Search", func=GoogleSearchAPIWrapper(google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID, k=5).run, description="Search the web. Useful about current events, everyday life, news, technical topics, errors or fixes."),
+            Tool(name="Wolfram Alpha", func=WolframAlphaAPIWrapper(wolfram_alpha_appid=WOLFRAM_ALPHA_APPID).run, description="Search Wolfram Alpha. Useful about science, engineering, technology, culture and society"),
             Tool(name="Search User Documents", func=self.search_database, description="Search user documents database")
         ])
         
@@ -167,3 +150,39 @@ class Prompter:
         except Exception as e:
             logger.error(f"Error generating response: {e}")
             return "An error occurred while generating the response."
+    
+    def save_document(self, document):
+        try:
+            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
+            summary = db.add_document(document=document)
+            return summary
+        except Exception as e:
+            logger.error(f"Error saving document: {e}")
+            return "Error saving document"
+
+    def save_url(self, url):
+        try:
+            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
+            summary = db.add_url(url=url)
+            return summary
+        except Exception as e:
+            logger.error(f"Error saving URL: {e}")
+            return "Error saving URL"
+        
+    def search_database(self, query):
+        try:
+            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
+            results = db.query(query=query)
+            return results
+        except Exception as e:
+            logger.error(f"Error searching user documents: {e}")
+            return "Error searching user documents"
+    
+    def clear_database(self):
+        try:
+            db = VectorDB(chat_user_id=self.chat_user_id, openai_api_key=openai.api_key)
+            db.clear_database()
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing user documents: {e}")
+            return False
