@@ -177,3 +177,74 @@ class WhatsAppWrapper:
         except requests.HTTPError as err:
             raise WhatsAppAPIError(f"Error sending document: {err}")
         return response.status_code
+    
+    def process_webhook_data(self, data):
+        response = []
+        for entry in data["entry"]:
+            for change in entry["changes"]:
+                messages = change["value"]["messages"]
+                for message in messages:
+
+                    message_type = message["type"]
+                    message_id = message["id"]
+                    name = change["value"]["contacts"][0]["profile"]["name"]
+                    phone_number = change["value"]["contacts"][0]["wa_id"]
+                    timestamp = message["timestamp"]
+                    sender_phone = message["from"]
+
+                    # add these common fields to the response
+                    response.append({
+                        "type": message_type,
+                        "phone_number": phone_number,
+                        "name": name,
+                        "message_id": message_id,
+                        "timestamp": timestamp,
+                        "sender_phone": sender_phone
+                    })
+
+                    if message_type == "text":
+                        message_text = message["text"]["body"]
+                        response.append({
+                            "type": message_type,
+                            "text": message_text,
+                            "phone_number": phone_number,
+                            "name": name,
+                            "message_id": message_id
+                        })
+                    elif message_type in ["image", "audio", "file", "video"]:
+                        media = message[message_type]
+                        media_id = media["id"]
+                        mime_type = media["mime_type"]
+                        response.append({
+                            "media_id": media_id,
+                            "mime_type": mime_type,
+                        })
+                    elif message_type == "button":
+                        button = message["button"]
+                        button_text = button["text"]
+                        context = message["context"]
+                        context_id = context["id"]
+                        response.append({
+                            "button_text": button_text,
+                            "context_id": context_id,
+                        })
+                    elif message_type == "interactive":
+                        interactive = message["interactive"]
+                        interactive_type = interactive["type"]
+                        if interactive_type == "list_reply":
+                            list_reply = interactive["list_reply"]
+                            list_reply_id = list_reply["id"]
+                            list_reply_title = list_reply["title"]
+                            response.append({
+                                "list_reply_id": list_reply_id,
+                                "list_reply_title": list_reply_title,
+                            })
+                        elif interactive_type == "button_reply":
+                            button_reply = interactive["button_reply"]
+                            button_reply_id = button_reply["id"]
+                            button_reply_title = button_reply["title"]
+                            response.append({
+                                "button_reply_id": button_reply_id,
+                                "button_reply_title": button_reply_title,
+                            })
+        return response
