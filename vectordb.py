@@ -4,6 +4,8 @@ Vector database for storing vectors and their metadata.
 
 import os
 import logging
+import asyncio
+
 from langchain.document_loaders import UnstructuredFileLoader, WebBaseLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
@@ -34,7 +36,7 @@ class VectorDB():
         self.vector_store = Chroma(embedding_function=self.embeddings, client_settings=CHROMA_SETTINGS, persist_directory="db", collection_name=chat_user_id)
         self.llm = OpenAI(openai_api_key=openai_api_key, temperature=0)
 
-    def add_document(self, document):
+    async def add_document(self, document):
         """Ingest a document into the vector store."""
         try:
             # Load the document
@@ -51,7 +53,7 @@ class VectorDB():
             self.vector_store.persist()
 
             # return the summary of the document
-            summary = self.summarize(texts)
+            summary = await self.summarize(texts)
 
             return summary
         except Exception as e:
@@ -59,7 +61,7 @@ class VectorDB():
             return None
     
     
-    def add_url(self, url):
+    async def add_url(self, url):
         """Ingest a web page into the vector store."""
         try:
             loader = WebBaseLoader(url)
@@ -76,7 +78,7 @@ class VectorDB():
             self.vector_store.persist()
 
             # Gather the summary
-            summary = self.summarize(texts)
+            summary = await self.summarize(texts)
 
             return summary
         except Exception as e:
@@ -84,7 +86,7 @@ class VectorDB():
             return None
     
 
-    def query(self, query):
+    async def query(self, query):
         """Query the vector store for similar vectors."""
         try:
             # Query the vector store
@@ -92,7 +94,7 @@ class VectorDB():
                 llm=self.llm, chain_type="stuff", retriever=self.vector_store.as_retriever())
 
             # Get the results
-            results = chain({"question": query}, return_only_outputs=True)
+            results = await chain.arun(question=query, return_only_outputs=True)
 
             return results
         except Exception as e:
@@ -100,7 +102,7 @@ class VectorDB():
             return None
 
     
-    def summarize(self, docs):
+    async def summarize(self, docs):
         """Get the summary of a document."""
         
         # Prompt template only for the stuff chain type
@@ -119,14 +121,14 @@ class VectorDB():
                                      combine_prompt=prompt)
         
         try:
-            summary = chain.run(input_documents=docs, return_only_outputs=True)
+            summary = await chain.arun(input_documents=docs, return_only_outputs=True)
 
             return summary
         except Exception as e:
             self.logger.error(f"Error gathering summary: {e}")
             return None
     
-    def clear_database(self):
+    async def clear_database(self):
         """Clear the vector store."""
         try:
             # Delete the collection from the vector store
