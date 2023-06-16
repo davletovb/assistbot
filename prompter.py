@@ -9,7 +9,7 @@ from langchain.prompts import PromptTemplate
 from langchain.agents import load_tools, initialize_agent, Tool, AgentType
 from langchain.memory import ConversationBufferMemory
 from langchain.tools import DuckDuckGoSearchRun
-from langchain.utilities import GoogleSearchAPIWrapper
+from langchain.utilities import WikipediaAPIWrapper, GoogleSearchAPIWrapper
 from langchain.utilities.wolfram_alpha import WolframAlphaAPIWrapper
 from langchain.callbacks.streaming_stdout_final_only import FinalStreamingStdOutCallbackHandler
 
@@ -125,7 +125,38 @@ class Prompter:
             logger.error(f"Error generating test: {e}")
             return None
 
-
+    async def search_wikipedia(self, query):
+        wikipedia = WikipediaAPIWrapper()
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, lambda: wikipedia.run(query))
+            #response = await wikipedia.run(query)
+            return response
+        except Exception as e:
+            logger.error(f"Error searching wikipedia: {e}")
+            return None
+    
+    async def search_google(self, query):
+        search = GoogleSearchAPIWrapper(google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID, k=5)
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, lambda: search.run(query))
+            #response = await search.run(query)
+            return response
+        except Exception as e:
+            logger.error(f"Error searching wikipedia: {e}")
+            return None
+    
+    async def search_wolframalpha(self, query):
+        wolframalpha = WolframAlphaAPIWrapper(wolfram_alpha_appid=WOLFRAM_ALPHA_APPID)
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, lambda: wolframalpha.run(query))
+            #response = await wolframalpha.run(query)
+            return response
+        except Exception as e:
+            logger.error(f"Error searching wikipedia: {e}")
+            return None
 
     # Prompt the LLM to generate a response
     async def generate_response(self, message, chat_context):
@@ -157,17 +188,17 @@ class Prompter:
         #llm_chain = ConversationChain(llm=llm, prompt=prompt_template)
 
         # Provide access to a list of tools that the agents will use
-        tools = load_tools(['wikipedia',
-                            'open-meteo-api',
-                            'llm-math'],
+        # add 'open-meteo-api' to the list of tools later
+        tools = load_tools(['llm-math'],
                             llm=llm)
         
         tools.extend([
-            Tool(name="Image Model", func=self.generate_image, description="Generate images from text", return_direct=True),
-            Tool(name="Google Search", func=GoogleSearchAPIWrapper(google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID, k=5).run, description="Search the web. Useful about current events, everyday life, news, technical topics, errors or fixes."),
-            Tool(name="Wolfram Alpha", func=WolframAlphaAPIWrapper(wolfram_alpha_appid=WOLFRAM_ALPHA_APPID).run, description="Search Wolfram Alpha. Useful about science, engineering, technology, culture and society"),
-            Tool(name="Search User Documents", func=self.search_database, description="Search user documents database"),
-            Tool(name="Generate Test", func=self.generate_test, description="Generate a test based on the chat topic. Return the question, list of options and the id of the right answer. Use this tool at random times, rarely."),
+            Tool(name="Image Model", func=self.generate_image, coroutine=self.generate_image, description="Generate images from text", return_direct=True),
+            Tool(name="Wikipedia", func=self.search_wikipedia, coroutine=self.search_wikipedia, description="Search Wikipedia for general information"),
+            Tool(name="Google Search", func=self.search_google, coroutine=self.search_google, description="Search the web. Useful about current events, everyday life, news, technical topics, errors or fixes."),
+            Tool(name="Wolfram Alpha", func=self.search_wolframalpha, coroutine=self.search_wolframalpha, description="Search Wolfram Alpha. Useful about science, weather, climate, engineering, technology, culture and society"),
+            Tool(name="Search User Documents", func=self.search_database, coroutine=self.search_database, description="Search user documents database"),
+            Tool(name="Generate Test", func=self.generate_test, coroutine=self.generate_test, description="Generate a test based on the chat topic. Return the question, list of options and the id of the right answer. Use this tool at random times, rarely."),
         ])
         
 
@@ -179,9 +210,9 @@ class Prompter:
                                 handle_parsing_errors="Check your output and make sure it conforms!")
 
         try:
-            loop = asyncio.get_event_loop()
-            answer = await loop.run_in_executor(None, lambda: agent.run(input=template, chat_history=formatted_chat_history, return_only_outputs=True))
-            #answer = await agent.arun(input=template, chat_history=formatted_chat_history, return_only_outputs=True)
+            #loop = asyncio.get_event_loop()
+            #answer = await loop.run_in_executor(None, lambda: agent.run(input=template, chat_history=formatted_chat_history, return_only_outputs=True))
+            answer = await agent.arun(input=template, chat_history=formatted_chat_history, return_only_outputs=True)
             return answer
         except Exception as e:
             logger.error(f"Error generating response: {e}")
